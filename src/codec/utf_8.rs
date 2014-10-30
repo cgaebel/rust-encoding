@@ -368,7 +368,7 @@ impl UTF8IobufDecoder {
             debug_assert_eq!(self.queuelen, 0);
             debug_assert!(chars_not_yet_output < 4);
             out_buf.flip_hi();
-            out_buf.extend(chars_not_yet_output as uint).unwrap(); // XXX should be unsafe
+            out_buf.resize(chars_not_yet_output as uint).unwrap(); // XXX should be unsafe
             for q_elem in self.queue.iter_mut().take(chars_not_yet_output as uint) {
                 *q_elem = out_buf.consume_be().unwrap(); // XXX should be unsafe
             }
@@ -522,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_iobuf() {
+    fn test_iobuf_valid() {
         // trivial
         check(
             vec!(Str(""), Str("")),
@@ -578,6 +578,33 @@ mod tests {
     }
 
     #[test]
+    fn test_iobuf_invalid_multibyte_span() {
+        check(
+            vec!(
+                Dat(vec!(0xef, 0xbf, 0xbe))),
+            vec!(
+                vec!(Str("\ufffe"))),
+            None);
+
+        check(
+            vec!(
+                Dat(vec!(0xef, 0xbf)),
+                Dat(vec!(0xbe))),
+            vec!(
+                vec!(),
+                vec!(Str("\ufffe"))),
+            None);
+
+        check(
+            vec!(
+                Dat(vec!(0xef, 0xbf))),
+            vec!(
+                vec!()),
+            Some(vec!(
+                Dat(vec!(0xef, 0xbf)))));
+    }
+
+    #[test]
     fn test_valid() {
         // one byte
         let mut d = UTF8Encoding.decoder();
@@ -609,6 +636,11 @@ mod tests {
         let mut d = UTF8Encoding.decoder();
         assert_feed_ok!(d, [0xf0, 0x90, 0x82, 0x82], [], "\U00010082");
         assert_feed_ok!(d, [], [], "");
+        assert_finish_ok!(d, "");
+
+        // Invalid code positions.
+        let mut d = UTF8Encoding.decoder();
+        assert_feed_ok!(d, [0xef, 0xbf, 0xbe], [], "\ufffe");
         assert_finish_ok!(d, "");
 
         // we don't test encoders as it is largely a no-op.
