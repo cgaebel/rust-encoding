@@ -3,9 +3,9 @@
 // See README.md and LICENSE.txt for details.
 
 //! UTF-16.
-
-use util::{as_char, StrCharIndex};
+use codec;
 use types::*;
+use util::{as_char, StrCharIndex};
 
 /// An implementation type for little endian.
 ///
@@ -81,6 +81,7 @@ impl<E:Endian+Clone+'static> Encoding for UTF16Encoding<E> {
     fn whatwg_name(&self) -> Option<&'static str> { Endian::whatwg_name(None::<E>) }
     fn encoder(&self) -> Box<Encoder> { UTF16Encoder::new(None::<E>) }
     fn decoder(&self) -> Box<Decoder> { UTF16Decoder::new(None::<E>) }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /**
@@ -583,4 +584,3 @@ mod tests {
         assert_finish_ok!(d, "");
     }
 }
-

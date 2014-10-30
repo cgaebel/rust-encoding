@@ -24,6 +24,7 @@
 
 //! UTF-8, the universal encoding.
 
+use iobuf::{Iobuf, RWIobuf};
 use std::{str, mem};
 use types::*;
 
@@ -50,6 +51,7 @@ impl Encoding for UTF8Encoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("utf-8") }
     fn encoder(&self) -> Box<Encoder> { UTF8Encoder::new() }
     fn decoder(&self) -> Box<Decoder> { UTF8Decoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { box UTF8IobufDecoder::new() }
 }
 
 /// An encoder for UTF-8.
@@ -139,7 +141,7 @@ static REJECT_STATE_WITH_BACKUP: u8 = 86;
 
 macro_rules! is_reject_state(($state:expr) => ($state >= REJECT_STATE_WITH_BACKUP))
 macro_rules! next_state(($state:expr, $ch:expr) => (
-    STATE_TRANSITIONS[($state + CHAR_CATEGORY[$ch as uint]) as uint]
+    unsafe { *STATE_TRANSITIONS.unsafe_get(($state + CHAR_CATEGORY[$ch as uint]) as uint) }
 ))
 
 impl Decoder for UTF8Decoder {
@@ -212,6 +214,198 @@ impl Decoder for UTF8Decoder {
     }
 }
 
+pub struct UTF8IobufDecoder {
+    queue:    [u8, ..4],
+    queuelen: u8,
+    state:    u8,
+}
+
+impl Clone for UTF8IobufDecoder {
+    fn clone(&self) -> UTF8IobufDecoder {
+        UTF8IobufDecoder {
+            queuelen: self.queuelen,
+            queue:    self.queue,
+            state:    self.state,
+        }
+    }
+}
+
+impl UTF8IobufDecoder {
+    pub fn new() -> UTF8IobufDecoder {
+        UTF8IobufDecoder { queuelen: 0, queue: [0, ..4], state: INITIAL_STATE }
+    }
+
+    fn queue_to_iobuf(&mut self) -> RWIobuf<'static> {
+        RWIobuf::from_vec(
+            self.queue
+                .iter()
+                .map(|&x| x)
+                .take(mem::replace(&mut self.queuelen, 0) as uint)
+                .collect())
+    }
+
+    #[cold]
+    fn deal_with_overflow<'a>(
+            &mut self,
+            in_buf:  &mut RWIobuf<'a>,
+            out_buf: &mut RWIobuf<'a>,
+            output:  &mut IobufWriter) {
+        loop {
+            let ch: u8 =
+                match in_buf.consume_be() {
+                    Ok(ch)  => ch,
+                    Err(()) => break, // no input left.
+                };
+
+            out_buf.extend(1).unwrap(); // XXX should be unsafe
+
+            unsafe {
+                debug_assert!(self.queuelen < 4);
+                *self.queue.unsafe_mut(self.queuelen as uint) = ch;
+                self.queuelen += 1;
+            }
+
+            self.state = next_state!(self.state, ch);
+
+            let is_good =
+                if self.state == ACCEPT_STATE {
+                    true
+                } else if is_reject_state!(self.state) {
+                    false
+                } else {
+                    continue;
+                };
+
+            let queue = self.queue_to_iobuf();
+
+            if is_good {
+                output.write_buf(&queue);
+            } else {
+                output.write_err(&queue, "invalid sequence".into_maybe_owned());
+            }
+
+            self.queuelen = 0;
+            break;
+        }
+
+        // Skip the parts we just sent to the queue.
+        out_buf.flip_hi();
+    }
+
+    /// `in_buf` has all the input yet to be consumed within the window, and the
+    /// limits have been narrowed to the window.
+    ///
+    /// `out_buf` is initially empty, but set to the same buffer as `in_buf`. It
+    /// will be expanded and sent in as few chunks as possible to `output`.
+    fn raw_feed_impl<'a>(&mut self,
+                         mut in_buf:  RWIobuf<'a>,
+                         mut out_buf: RWIobuf<'a>,
+                         output: &mut IobufWriter) {
+        // optimization: If there was no overflow saved in the queue, move any
+        // initial ascii into `out_buf`.
+        if self.queuelen == 0 {
+            unsafe {
+                let cap = in_buf.cap();
+                // TODO: SSE -- just grab 16 bytes at a time, mask off the top
+                // bits, and cmp with 0.
+                let first_msb = in_buf.as_slice().iter().position(|&ch| ch >= 0x80).unwrap_or(cap);
+                in_buf.advance(first_msb).unwrap(); // XXX should be unsafe
+                out_buf.extend(first_msb).unwrap(); // XXX should be unsafe
+            }
+        } else {
+            // There's stuff in the queue. Deal with it first.
+            self.deal_with_overflow(&mut in_buf, &mut out_buf, output);
+        }
+
+        let mut chars_not_yet_output: u8 = 0;
+
+        loop {
+            let ch: u8 =
+                match in_buf.consume_be() {
+                    Ok(ch)  => ch,
+                    Err(()) => break,
+                };
+
+            chars_not_yet_output += 1;
+
+            self.state = next_state!(self.state, ch);
+
+            if self.state == ACCEPT_STATE {
+                // Safe, because the buffer is a mirror of `in_buf` and we
+                // already bounds checked that with `consume_be`.
+                //unsafe {
+                    out_buf.extend(chars_not_yet_output as uint).unwrap(); // XXX should be unsafe
+                    chars_not_yet_output = 0;
+                //}
+            } else if is_reject_state!(self.state) {
+                // Send any unprocessed output.
+                output.write_buf(&out_buf);
+                // Safe, because we know it mirrors `in_buf`, and therefore has
+                // this many chars waiting.
+                //unsafe {
+                    out_buf.flip_hi();
+                    out_buf.resize(chars_not_yet_output as uint).unwrap(); // XXX should be unsafe
+                //}
+                // Send the error.
+                output.write_err(&out_buf, "invalid sequence".into_maybe_owned());
+                // Reset out_buf.
+                //unsafe {
+                    out_buf.flip_hi();
+                    out_buf.resize(0).unwrap(); // Always safe to resize to 0. XXX should be unsafe
+                //}
+                // Reset chars_not_yet_output.
+                chars_not_yet_output = 0;
+            }
+        }
+
+        // Flush unprocessed output.
+        if out_buf.len() > 0 {
+            output.write_buf(&out_buf);
+        }
+
+        // Save unprocessed items in the queue.
+        if chars_not_yet_output > 0 {
+            debug_assert_eq!(self.queuelen, 0);
+            debug_assert!(chars_not_yet_output < 4);
+            out_buf.flip_hi();
+            out_buf.extend(chars_not_yet_output as uint).unwrap(); // XXX should be unsafe
+            for q_elem in self.queue.iter_mut().take(chars_not_yet_output as uint) {
+                *q_elem = out_buf.consume_be().unwrap(); // XXX should be unsafe
+            }
+            self.queuelen = chars_not_yet_output;
+        }
+    }
+}
+
+impl IobufDecoder for UTF8IobufDecoder {
+    fn from_self(&self) -> Box<IobufDecoder> {
+        box UTF8IobufDecoder::new() as Box<IobufDecoder>
+    }
+
+    fn is_ascii_compatible(&self) -> bool { true }
+
+    /// Feeds a buffer into the decoder, writing it out in as few chunks as possible.
+    /// The output will have every byte of the input buffer reported to it, in the
+    /// order they were passed in.
+    fn raw_feed<'a>(&mut self, mut in_buf: RWIobuf<'a>, output: &mut IobufWriter) {
+        in_buf.narrow();
+
+        let mut out_buf = in_buf.clone();
+        unsafe { out_buf.unsafe_resize(0); } // It's always safe to resize to 0.
+
+        self.raw_feed_impl(in_buf, out_buf, output)
+    }
+
+    /// Finishes the decoder,
+    /// pushes the a decoded string at the end of the given output,
+    /// and returns optional error information (None means success).
+    fn raw_finish(&mut self, output: &mut IobufWriter) {
+        if self.queuelen > 0 {
+            output.write_err(&self.queue_to_iobuf(), "invalid sequence".into_maybe_owned());
+        }
+    }
+}
+
 /// Equivalent to `std::str::from_utf8`.
 /// This function is provided for the fair benchmark against the stdlib's UTF-8 conversion
 /// functions, as rust-encoding always allocates a new string.
@@ -247,9 +441,141 @@ mod tests {
     // stress test: <http://www.cl.cam.ac.uk/~mgk25/ucs/examples/UTF-8-test.txt>.
 
     use super::{UTF8Encoding, from_utf8};
+    use iobuf::{ROIobuf, RWIobuf, Iobuf};
+
+    use std::mem;
     use std::str;
     use testutils;
     use types::*;
+
+    #[deriving(Show, Eq, PartialEq)]
+    enum IobufChunk {
+        Good(String),
+        Bad(Vec<u8>),
+    }
+
+    #[deriving(Show, Eq, PartialEq)]
+    struct IobufChunks {
+        chunk_list: Vec<IobufChunk>,
+    }
+
+    impl IobufChunks {
+        fn new() -> IobufChunks {
+            IobufChunks {
+                chunk_list: Vec::new(),
+            }
+        }
+    }
+
+    impl IobufWriter for IobufChunks {
+        /// Writes a buffer of successfully decoded bytes.
+        fn write_buf<'a>(&mut self, buf: &RWIobuf<'a>) {
+            self.chunk_list.push(Good(unsafe { mem::transmute(buf.deep_clone().into_vec().unwrap()) }));
+        }
+
+        /// The `buf` passed to this function represents the exact bytes which
+        /// triggered the error.
+        fn write_err<'a>(&mut self, buf: &RWIobuf<'a>, _error: str::SendStr) {
+            self.chunk_list.push(Bad(buf.deep_clone().into_vec().unwrap()));
+        }
+    }
+
+    #[deriving(Show, Eq, PartialEq)]
+    enum TestChunk {
+        Str(&'static str),
+        Dat(Vec<u8>),
+    }
+
+    impl TestChunk {
+        fn to_iobuf_chunk(self) -> IobufChunk {
+            match self {
+                Str(s) => Good(s.to_string()),
+                Dat(v) => Bad(v),
+            }
+        }
+    }
+
+    fn check(inputs: Vec<TestChunk>, expected_outputs: Vec<Vec<TestChunk>>, final_chunk: Option<Vec<TestChunk>>) {
+        let mut d = UTF8Encoding.iobuf_decoder();
+        let mut out = IobufChunks::new();
+
+        let mut seen = vec!();
+
+        for (input, expected) in inputs.into_iter().zip(expected_outputs.into_iter()) {
+            match input {
+                Str(s) => d.raw_feed(ROIobuf::from_str(s).deep_clone(), &mut out),
+                Dat(v) => d.raw_feed(RWIobuf::from_vec(v), &mut out),
+            }
+
+            seen.extend(expected.into_iter().map(|e| e.to_iobuf_chunk()));
+            assert_eq!(out.chunk_list, seen);
+        }
+
+        match final_chunk {
+            None => {},
+            Some(expected) => {
+                d.raw_finish(&mut out);
+                seen.extend(expected.into_iter().map(|e| e.to_iobuf_chunk()));
+                assert_eq!(out.chunk_list, seen);
+            }
+        }
+    }
+
+    #[test]
+    fn test_valid_iobuf() {
+        // trivial
+        check(
+            vec!(Str(""), Str("")),
+            vec!(vec!(), vec!()),
+            None);
+
+        // one byte
+        check(
+            vec!(Str("A"), Str("BC"), Str(""), Str("DEF")),
+            vec!(
+                vec!(Str("A")),
+                vec!(Str("BC")),
+                vec!(),
+                vec!(Str("DEF"))),
+            None);
+
+        // two bytes
+        check(
+            vec!(
+                Dat(vec!(0xc2, 0xa2)),
+                Dat(vec!(0xc2, 0xac, 0xc2, 0xa9)),
+                Str(""),
+                Dat(vec!(0xd5, 0xa1, 0xd5, 0xb5, 0xd5, 0xa2, 0xd5, 0xb8, 0xd6, 0x82,
+                         0xd5, 0xa2, 0xd5, 0xa5, 0xd5, 0xb6))),
+            vec!(
+                vec!(Str("\xa2")),
+                vec!(Str("\xac\xa9")),
+                vec!(),
+                vec!(Str("\u0561\u0575\u0562\u0578\u0582\u0562\u0565\u0576"))),
+            None);
+
+        // three bytes
+        check(
+            vec!(
+                Dat(vec!(0xed, 0x92, 0x89)),
+                Dat(vec!(0xe6, 0xbc, 0xa2, 0xe5, 0xad, 0x97)),
+                Dat(vec!()),
+                Dat(vec!(0xc9, 0x99, 0xc9, 0x94, 0xc9, 0x90))),
+            vec!(
+                vec!(Str("\ud489")),
+                vec!(Str("\u6f22\u5b57")),
+                vec!(),
+                vec!(Str("\u0259\u0254\u0250"))),
+            None);
+
+        // four bytes
+        check(
+            vec!(Dat(vec!(0xf0, 0x90, 0x82, 0x82)), Dat(vec!())),
+            vec!(vec!(Str("\U00010082")), vec!()),
+            None);
+
+        // we don't test encoders as it is largely a no-op.
+    }
 
     #[test]
     fn test_valid() {
@@ -346,6 +672,20 @@ mod tests {
         assert_feed_ok!(d, [0xa9, 0x20], [], "\xa9\x20");
         assert_finish_ok!(d, "");
     }
+
+    /* TODO(cgaebel): Currently fails.
+    #[test]
+    fn test_invalid_multibyte_span() {
+        use std::mem;
+        let mut d = UTF8Encoding.decoder();
+        // "ef bf be" is an invalid sequence.
+        assert_feed_ok!(d, [], [0xef, 0xbf], "");
+        let input: [u8, ..1] = [ 0xbe ];
+        let (_, _, buf) = unsafe { d.test_feed(mem::transmute(input.as_slice())) };
+        // Make sure no data was written to the buffer.
+        assert_eq!(buf, String::new());
+    }
+    */
 
     #[test]
     fn test_invalid_continuation() {
@@ -828,4 +1168,3 @@ mod tests {
         }
     }
 }
-

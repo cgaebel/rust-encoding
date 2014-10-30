@@ -17,6 +17,7 @@ impl Encoding for EncoderOnlyUTF8Encoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("replacement") } // WHATWG compatibility
     fn encoder(&self) -> Box<Encoder> { codec::utf_8::UTF8Encoding.encoder() }
     fn decoder(&self) -> Box<Decoder> { codec::error::ErrorEncoding.decoder() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// Algorithmic mapping for `x-user-defined` encoding.
@@ -31,4 +32,3 @@ pub mod x_user_defined {
         if (code & !0x7f) == 0xf780 {(code & 0xff) as u8} else {0}
     }
 }
-

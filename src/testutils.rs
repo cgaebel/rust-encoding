@@ -377,4 +377,3 @@ macro_rules! multi_byte_range_tests(
         }
     );
 )
-

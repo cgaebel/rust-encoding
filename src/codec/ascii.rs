@@ -4,6 +4,7 @@
 
 //! 7-bit ASCII encoding.
 
+use codec;
 use std::{str, mem};
 use types::*;
 
@@ -20,6 +21,7 @@ impl Encoding for ASCIIEncoding {
     fn name(&self) -> &'static str { "ascii" }
     fn encoder(&self) -> Box<Encoder> { ASCIIEncoder::new() }
     fn decoder(&self) -> Box<Decoder> { ASCIIDecoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for ASCII.

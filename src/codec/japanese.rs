@@ -3,10 +3,10 @@
 // See README.md and LICENSE.txt for details.
 
 //! Legacy Japanese encodings based on JIS X 0208 and JIS X 0212.
-
-use util::StrCharIndex;
+use codec;
 use index;
 use types::*;
+use util::StrCharIndex;
 
 /**
  * EUC-JP. (XXX with asymmetric JIS X 0212 support)
@@ -31,6 +31,7 @@ impl Encoding for EUCJPEncoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("euc-jp") }
     fn encoder(&self) -> Box<Encoder> { EUCJPEncoder::new() }
     fn decoder(&self) -> Box<Decoder> { EUCJP0212Decoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for EUC-JP with unused G3 character set.
@@ -422,6 +423,7 @@ impl Encoding for Windows31JEncoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("shift_jis") } // WHATWG compatibility
     fn encoder(&self) -> Box<Encoder> { Windows31JEncoder::new() }
     fn decoder(&self) -> Box<Decoder> { Windows31JDecoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for Shift_JIS with IBM/NEC extensions.
@@ -715,6 +717,7 @@ impl Encoding for ISO2022JPEncoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("iso-2022-jp") }
     fn encoder(&self) -> Box<Encoder> { ISO2022JPEncoder::new() }
     fn decoder(&self) -> Box<Decoder> { ISO2022JPDecoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 #[deriving(PartialEq,Clone)]

@@ -3,9 +3,9 @@
 // See README.md and LICENSE.txt for details.
 
 //! Common codec implementation for single-byte encodings.
-
-use util::{as_char, StrCharIndex};
+use codec;
 use types::*;
+use util::{as_char, StrCharIndex};
 
 /// A common framework for single-byte encodings based on ASCII.
 pub struct SingleByteEncoding {
@@ -20,6 +20,7 @@ impl Encoding for SingleByteEncoding {
     fn whatwg_name(&self) -> Option<&'static str> { self.whatwg_name }
     fn encoder(&self) -> Box<Encoder> { SingleByteEncoder::new(self.index_backward) }
     fn decoder(&self) -> Box<Decoder> { SingleByteDecoder::new(self.index_forward) }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for single-byte encodings based on ASCII.
@@ -126,4 +127,3 @@ mod tests {
         assert_feed_err!(e, "A", "\U00010000", "B", [0x41]);
     }
 }
-

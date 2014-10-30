@@ -181,6 +181,8 @@ Whenever in doubt, look at the source code and specifications for detailed expla
 
 #![allow(experimental)]
 
+extern crate iobuf;
+
 #[cfg(test)] extern crate test;
 
 pub use self::types::{CodecError, ByteWriter, StringWriter,
@@ -276,4 +278,3 @@ mod tests {
         test_one([0xE9, 0x00], "é\x00", "iso-8859-1");
     }
 }
-

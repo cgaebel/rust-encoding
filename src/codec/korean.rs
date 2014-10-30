@@ -3,10 +3,10 @@
 // See README.md and LICENSE.txt for details.
 
 //! Legacy Korean encodings based on KS X 1001.
-
-use util::StrCharIndex;
+use codec;
 use index;
 use types::*;
+use util::StrCharIndex;
 
 /**
  * Windows code page 949.
@@ -27,6 +27,7 @@ impl Encoding for Windows949Encoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("euc-kr") } // WHATWG compatibility
     fn encoder(&self) -> Box<Encoder> { Windows949Encoder::new() }
     fn decoder(&self) -> Box<Decoder> { Windows949Decoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for Windows code page 949.
@@ -243,4 +244,3 @@ mod windows949_tests {
         }))
     }
 }
-

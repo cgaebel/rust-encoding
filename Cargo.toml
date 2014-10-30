@@ -7,3 +7,6 @@ authors = ["Kang Seonghoon <public+rust@mearie.org>"]
 [lib]
 
 name = "encoding"
+
+[dependencies.iobuf]
+git = "https://github.com/cgaebel/iobuf"

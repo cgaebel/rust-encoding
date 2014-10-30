@@ -51,10 +51,12 @@
  * then it can just discard the first sequence and can emit the fixed string on an error.
  * It still has to feed the input bytes starting at the second offset again.
  */
+use iobuf::{Iobuf, RWIobuf};
 use std::str::SendStr;
 
 /// Error information from either encoder or decoder.
 #[experimental]
+#[deriving(Show)]
 pub struct CodecError {
     /// The byte position of the first remaining byte, with respect to the *current* input.
     /// For the `finish` call, this should be no more than zero (since there is no input).
@@ -246,6 +248,38 @@ pub trait Decoder: 'static {
     }
 }
 
+/// String writer used by `Decoder`s. In most cases this will be an owned string.
+#[unstable]
+pub trait IobufWriter: 'static {
+    /// Writes a buffer of successfully decoded bytes.
+    fn write_buf<'a>(&mut self, buf: &RWIobuf<'a>);
+
+    /// The `buf` passed to this function represents the exact bytes which
+    /// triggered the error.
+    fn write_err<'a>(&mut self, buf: &RWIobuf<'a>, error: SendStr);
+}
+
+/// Decoder converting a byte sequence into a Unicode string.
+#[experimental]
+pub trait IobufDecoder: 'static {
+    /// Creates a fresh `Decoder` instance which parameters are same as `self`.
+    fn from_self(&self) -> Box<IobufDecoder>;
+
+    /// Returns true if this encoding is compatible to ASCII,
+    /// i.e. bytes 00 through 7F always map to U+0000 through U+007F and nothing else.
+    fn is_ascii_compatible(&self) -> bool { false }
+
+    /// Feeds a buffer into the decoder, writing it out in as few chunks as possible.
+    /// The output will have every byte of the input buffer reported to it, in the
+    /// order they were passed in.
+    fn raw_feed<'a>(&mut self, input: RWIobuf<'a>, output: &mut IobufWriter);
+
+    /// Finishes the decoder,
+    /// pushes the a decoded string at the end of the given output,
+    /// and returns optional error information (None means success).
+    fn raw_finish<'a>(&mut self, output: &mut IobufWriter);
+}
+
 /// A trait object using dynamic dispatch which is a sendable reference to the encoding,
 /// for code where the encoding is not known at compile-time.
 #[stable]
@@ -272,6 +306,10 @@ pub trait Encoding {
     /// Creates a new decoder.
     #[experimental]
     fn decoder(&self) -> Box<Decoder>;
+
+    /// Creates a new iobuf decoder.
+    #[experimental]
+    fn iobuf_decoder(&self) -> Box<IobufDecoder>;
 
     /// An easy-to-use interface to `Encoder`.
     /// On the encoder error `trap` is called,
@@ -512,6 +550,7 @@ mod tests {
                             toggle: false } as Box<Encoder>
         }
         fn decoder(&self) -> Box<Decoder> { fail!("not supported") }
+        fn iobuf_decoder(&self) -> Box<IobufDecoder> { fail!("not supported") }
     }
 
     #[test]

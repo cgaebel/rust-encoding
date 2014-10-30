@@ -3,7 +3,7 @@
 // See README.md and LICENSE.txt for details.
 
 //! A placeholder encoding that returns encoder/decoder error for every case.
-
+use iobuf::{Iobuf, RWIobuf};
 use std::str;
 use types::*;
 
@@ -15,6 +15,7 @@ impl Encoding for ErrorEncoding {
     fn name(&self) -> &'static str { "error" }
     fn encoder(&self) -> Box<Encoder> { ErrorEncoder::new() }
     fn decoder(&self) -> Box<Decoder> { ErrorDecoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { box ErrorIobufDecoder::new() }
 }
 
 /// An encoder that always returns error.
@@ -67,6 +68,26 @@ impl Decoder for ErrorDecoder {
     }
 }
 
+#[deriving(Clone)]
+pub struct ErrorIobufDecoder;
+
+impl ErrorIobufDecoder {
+    pub fn new() -> ErrorIobufDecoder { ErrorIobufDecoder }
+}
+
+impl IobufDecoder for ErrorIobufDecoder {
+    fn from_self(&self) -> Box<IobufDecoder> { box ErrorIobufDecoder::new() as Box<IobufDecoder> }
+
+    fn raw_feed<'a>(&mut self, in_buf: RWIobuf<'a>, output: &mut IobufWriter) {
+        if !in_buf.is_empty() {
+            output.write_err(&in_buf, "invalid sequence".into_maybe_owned());
+        }
+    }
+
+    fn raw_finish(&mut self, _output: &mut IobufWriter) {
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ErrorEncoding;
@@ -92,4 +113,3 @@ mod tests {
         assert_finish_ok!(d, "");
     }
 }
-

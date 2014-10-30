@@ -3,10 +3,10 @@
 // See README.md and LICENSE.txt for details.
 
 //! Legacy traditional Chinese encodings.
-
-use util::StrCharIndex;
+use codec;
 use index;
 use types::*;
+use util::StrCharIndex;
 
 /**
  * Big5-2003 with common extensions. (XXX with asymmetric HKSCS-2008 support)
@@ -30,6 +30,7 @@ impl Encoding for BigFive2003Encoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("big5") } // WHATWG compatibility
     fn encoder(&self) -> Box<Encoder> { BigFive2003Encoder::new() }
     fn decoder(&self) -> Box<Decoder> { BigFive2003HKSCS2008Decoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for Big5-2003.
@@ -246,4 +247,3 @@ mod bigfive2003_tests {
         }))
     }
 }
-

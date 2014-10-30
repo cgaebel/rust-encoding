@@ -4,9 +4,10 @@
 
 //! Legacy simplified Chinese encodings based on GB 2312 and GB 18030.
 
-use util::StrCharIndex;
+use codec;
 use index;
 use types::*;
+use util::StrCharIndex;
 
 /**
  * GB 18030-2005.
@@ -39,6 +40,7 @@ impl Encoding for GB18030Encoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("gb18030") }
     fn encoder(&self) -> Box<Encoder> { GB18030Encoder::new() }
     fn decoder(&self) -> Box<Decoder> { GB18030Decoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for GB 18030.
@@ -337,6 +339,7 @@ impl Encoding for HZEncoding {
     fn whatwg_name(&self) -> Option<&'static str> { Some("hz-gb-2312") }
     fn encoder(&self) -> Box<Encoder> { HZEncoder::new() }
     fn decoder(&self) -> Box<Decoder> { HZDecoder::new() }
+    fn iobuf_decoder(&self) -> Box<IobufDecoder> { codec::error::ErrorEncoding.iobuf_decoder() }
 }
 
 /// An encoder for HZ.
@@ -607,4 +610,3 @@ mod hz_tests {
         }))
     }
 }
-
